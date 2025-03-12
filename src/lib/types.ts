@@ -17,3 +17,23 @@ export interface Transcript {
   language?: string;
   createdAt: Date;
 }
+
+// Azure Configuration Interfaces
+export interface AzureStorageConfig {
+  accountName: string;
+  accountKey: string;
+  containerName: string;
+}
+
+export interface AzureAIConfig {
+  endpoint: string;
+  apiKey: string;
+  region: string;
+}
+
+export interface AzureCosmosConfig {
+  endpoint: string;
+  key: string;
+  databaseName: string;
+  containerName: string;
+}
