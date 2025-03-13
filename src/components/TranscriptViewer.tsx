@@ -7,8 +7,9 @@ import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
 import { Video, Transcript } from "@/lib/types";
 import { getTranscript, downloadTranscript } from "@/lib/azure";
-import { Loader, FileText, Download, Copy, CheckCheck } from "lucide-react";
+import { Loader, FileText, Download, Copy, CheckCheck, FileDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 interface TranscriptViewerProps {
   video?: Video;
@@ -28,9 +29,9 @@ export const TranscriptViewer = ({ video }: TranscriptViewerProps) => {
     }
   }, [video]);
 
-  const handleDownload = () => {
+  const handleDownload = (format: 'txt' | 'srt' = 'txt') => {
     if (video?.id) {
-      downloadTranscript(video.id, video.name);
+      downloadTranscript(video.id, video.name, format);
     }
   };
 
@@ -187,10 +188,25 @@ export const TranscriptViewer = ({ video }: TranscriptViewerProps) => {
           {copied ? <CheckCheck className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
           {copied ? "Copied" : "Copy Text"}
         </Button>
-        <Button onClick={handleDownload} className="smooth-transition">
-          <Download className="h-4 w-4 mr-2" />
-          Download Transcript
-        </Button>
+        
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button className="smooth-transition">
+              <Download className="h-4 w-4 mr-2" />
+              Download Transcript
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleDownload('txt')}>
+              <FileText className="h-4 w-4 mr-2" />
+              Text Format (.txt)
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleDownload('srt')}>
+              <FileDown className="h-4 w-4 mr-2" />
+              Subtitle Format (.srt)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </CardFooter>
     </Card>
   );

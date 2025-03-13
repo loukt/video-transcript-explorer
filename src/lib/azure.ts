@@ -139,91 +139,199 @@ export const uploadVideoToAzure = async (
 
 // Process the video with Azure AI Content Understanding
 export const processVideo = async (video: Video): Promise<Video> => {
-  return new Promise((resolve, reject) => {
-    try {
-      // Start with 0% processing
-      let processingProgress = 0;
-      const interval = setInterval(() => {
-        processingProgress += Math.random() * 10;
+  try {
+    // Update to processing status
+    let updatedVideo: Video = { 
+      ...video, 
+      status: 'processing', 
+      processingProgress: 0 
+    };
+    
+    mockVideos = mockVideos.map(v => v.id === video.id ? updatedVideo : v);
+    
+    // Start the Analysis Job
+    const analysisJobResponse = await startAnalysisJob(video.blobUrl);
+    
+    if (!analysisJobResponse || !analysisJobResponse.id) {
+      throw new Error("Failed to start analysis job");
+    }
+
+    const jobId = analysisJobResponse.id;
+    
+    // Poll for job completion
+    let isCompleted = false;
+    let processingProgress = 0;
+    
+    while (!isCompleted) {
+      // Increment progress estimation
+      processingProgress += Math.min(5, 100 - processingProgress); 
+      
+      // Update video processing status
+      updatedVideo = { 
+        ...updatedVideo, 
+        processingProgress: Math.min(Math.round(processingProgress), 95) // max 95% until confirmed completion
+      };
+      
+      mockVideos = mockVideos.map(v => v.id === video.id ? updatedVideo : v);
+
+      // Check job status
+      const analysisResult = await getAnalysisJobResult(jobId);
+      
+      if (analysisResult?.status === "Succeeded") {
+        isCompleted = true;
         
-        if (processingProgress >= 100) {
-          processingProgress = 100;
-          clearInterval(interval);
-          
-          // Call Azure AI Content Understanding API
-          callAzureAIContentUnderstanding(video)
-            .then(transcript => {
-              // Save transcript to CosmosDB
-              saveTranscriptToCosmosDB(transcript)
-                .then(() => {
-                  // Update video status
-                  const completedVideo: Video = { 
-                    ...video, 
-                    status: 'completed', 
-                    processingProgress: 100 
-                  };
-                  
-                  mockVideos = mockVideos.map(v => 
-                    v.id === video.id ? completedVideo : v
-                  );
-                  
-                  toast({
-                    title: "Processing complete",
-                    description: `Transcript for "${video.name}" is ready.`
-                  });
-                  
-                  resolve(completedVideo);
-                })
-                .catch(error => {
-                  console.error("Error saving transcript to CosmosDB:", error);
-                  reject(error);
-                });
-            })
-            .catch(error => {
-              console.error("Error calling Azure AI Content Understanding:", error);
-              reject(error);
-            });
-        }
+        // Process and save the transcript
+        const transcript = processTranscriptFromResponse(video.id, analysisResult);
         
-        // Update processing progress
-        const updatedVideo: Video = { 
-          ...video, 
-          processingProgress: Math.min(Math.round(processingProgress), 100),
-          status: 'processing'
+        // Save transcript to CosmosDB
+        await saveTranscriptToCosmosDB(transcript);
+        
+        // Update video to completed status
+        const completedVideo: Video = { 
+          ...updatedVideo, 
+          status: 'completed', 
+          processingProgress: 100 
         };
         
-        mockVideos = mockVideos.map(v => 
-          v.id === video.id ? updatedVideo : v
-        );
-      }, 700);
-    } catch (error) {
-      console.error("Error in video processing:", error);
-      reject(error);
+        mockVideos = mockVideos.map(v => v.id === video.id ? completedVideo : v);
+        
+        toast({
+          title: "Processing complete",
+          description: `Transcript for "${video.name}" is ready.`
+        });
+        
+        return completedVideo;
+      } else if (analysisResult?.status === "Failed") {
+        throw new Error("Azure AI analysis job failed");
+      }
+      
+      // Wait before polling again
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
-  });
+    
+    throw new Error("Analysis job didn't complete as expected");
+  } catch (error) {
+    console.error("Error in video processing:", error);
+    
+    // Update video to error status
+    const errorVideo: Video = { 
+      ...video, 
+      status: 'error', 
+      processingProgress: 0 
+    };
+    
+    mockVideos = mockVideos.map(v => v.id === video.id ? errorVideo : v);
+    
+    toast({
+      title: "Processing failed",
+      description: `Failed to process "${video.name}". ${error instanceof Error ? error.message : 'Unknown error'}`,
+      variant: "destructive"
+    });
+    
+    throw error;
+  }
 };
 
-// Call Azure AI Content Understanding API
-const callAzureAIContentUnderstanding = async (video: Video): Promise<Transcript> => {
-  // In a real implementation, you would:
-  // 1. Get the video blob from Azure Blob Storage
-  // 2. Send it to Azure AI Content Understanding API
-  // 3. Process the response to extract the transcript
+// Start an analysis job with Azure AI Content Understanding
+const startAnalysisJob = async (videoUrl: string): Promise<any> => {
+  try {
+    const response = await fetch(`${AZURE_AI.endpoint}/content-understanding/analyzers/${ANALYZER_ID}:analyze?api-version=${API_VERSION}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Ocp-Apim-Subscription-Key': AZURE_AI.apiKey
+      },
+      body: JSON.stringify({
+        analysisInput: {
+          sources: [{
+            uri: videoUrl
+          }]
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Azure API error: ${response.status} ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error starting Azure AI analysis job:", error);
+    throw error;
+  }
+};
+
+// Get analysis job result
+const getAnalysisJobResult = async (jobId: string): Promise<any> => {
+  try {
+    const response = await fetch(`${AZURE_AI.endpoint}/content-understanding/analyzers/${ANALYZER_ID}/analyzes/${jobId}?api-version=${API_VERSION}`, {
+      method: 'GET',
+      headers: {
+        'Ocp-Apim-Subscription-Key': AZURE_AI.apiKey
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Azure API error: ${response.status} ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error getting Azure AI analysis result:", error);
+    throw error;
+  }
+};
+
+// Process transcript from API response
+const processTranscriptFromResponse = (videoId: string, apiResponse: any): Transcript => {
+  // Extract transcript content from the API response
+  const contents = apiResponse.result?.contents || [];
   
-  // For now, simulate this with a mock transcript
-  console.log("Would call Azure AI Content Understanding API with:", {
-    endpoint: AZURE_AI.endpoint,
-    apiKey: AZURE_AI.apiKey,
-    analyzerId: ANALYZER_ID,
-    apiVersion: API_VERSION,
-    videoUrl: video.blobUrl
+  // Process the transcript phrases from all content sections
+  const allPhrases: any[] = [];
+  
+  contents.forEach((content: any) => {
+    if (content.transcriptPhrases && content.transcriptPhrases.length > 0) {
+      content.transcriptPhrases.forEach((phrase: any) => {
+        if (phrase.text && phrase.text.trim() && phrase.startTimeMs !== undefined) {
+          allPhrases.push(phrase);
+        }
+      });
+    }
   });
   
-  // Create mock transcript
+  // Sort phrases by start time
+  allPhrases.sort((a, b) => a.startTimeMs - b.startTimeMs);
+  
+  // Create formatted text content
+  let textContent = "WEBVTT\n\n";
+  allPhrases.forEach((phrase, index) => {
+    if (phrase.startTimeMs !== undefined && phrase.endTimeMs !== undefined) {
+      const startTime = formatVttTime(phrase.startTimeMs);
+      const endTime = formatVttTime(phrase.endTimeMs);
+      
+      textContent += `${startTime} --> ${endTime}\n`;
+      if (phrase.speaker) {
+        textContent += `<v ${phrase.speaker}>\n`;
+      }
+      textContent += `${phrase.text}\n\n`;
+    }
+  });
+  
+  // Create raw data for SRT conversion
+  const rawData = {
+    phrases: allPhrases,
+    apiResponse: apiResponse
+  };
+  
+  // Create transcript object
   const transcript: Transcript = {
-    videoId: video.id,
-    content: generateMockTranscript(video.name),
-    language: 'en',
+    videoId: videoId,
+    content: textContent,
+    rawData: JSON.stringify(rawData),
+    language: allPhrases.length > 0 ? (allPhrases[0].locale || 'en') : 'en',
     createdAt: new Date()
   };
   
@@ -231,6 +339,37 @@ const callAzureAIContentUnderstanding = async (video: Video): Promise<Transcript
   mockTranscripts.push(transcript);
   
   return transcript;
+};
+
+// Format milliseconds to VTT time format (HH:MM:SS.mmm)
+const formatVttTime = (ms: number): string => {
+  if (!ms && ms !== 0) return "00:00:00.000";
+  
+  const totalSeconds = ms / 1000;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const milliseconds = Math.floor(ms % 1000);
+  
+  return `${padZero(hours)}:${padZero(minutes)}:${padZero(seconds)}.${padZero(milliseconds, 3)}`;
+};
+
+// Format milliseconds to SRT time format (HH:MM:SS,mmm)
+const formatSrtTime = (ms: number): string => {
+  if (!ms && ms !== 0) return "00:00:00,000";
+  
+  const totalSeconds = ms / 1000;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const milliseconds = Math.floor(ms % 1000);
+  
+  return `${padZero(hours)}:${padZero(minutes)}:${padZero(seconds)},${padZero(milliseconds, 3)}`;
+};
+
+// Pad numbers with leading zeros
+const padZero = (num: number, length = 2): string => {
+  return num.toString().padStart(length, '0');
 };
 
 // Save transcript to CosmosDB
@@ -257,23 +396,100 @@ export const getTranscript = (videoId: string): Transcript | undefined => {
   return mockTranscripts.find(t => t.videoId === videoId);
 };
 
-// Helper function to generate mock transcript text
-function generateMockTranscript(videoName: string): string {
-  return `This is a simulated transcript for the video titled "${videoName}".
+// Convert transcript to SRT format
+export const convertToSrt = (transcript: Transcript): string => {
+  try {
+    // Try to parse the raw data
+    if (!transcript.rawData) {
+      // If no raw data, convert from VTT format
+      return convertVttToSrt(transcript.content);
+    }
+    
+    const rawData = JSON.parse(transcript.rawData);
+    const phrases = rawData.phrases || [];
+    
+    let srtContent = '';
+    phrases.sort((a: any, b: any) => a.startTimeMs - b.startTimeMs);
+    
+    phrases.forEach((phrase: any, index: number) => {
+      if (phrase.startTimeMs !== undefined && phrase.endTimeMs !== undefined && phrase.text) {
+        // Add index
+        srtContent += `${index + 1}\n`;
+        
+        // Add timecode
+        const startTime = formatSrtTime(phrase.startTimeMs);
+        const endTime = formatSrtTime(phrase.endTimeMs);
+        srtContent += `${startTime} --> ${endTime}\n`;
+        
+        // Add text with speaker if available
+        if (phrase.speaker) {
+          srtContent += `[${phrase.speaker}] ${phrase.text}\n\n`;
+        } else {
+          srtContent += `${phrase.text}\n\n`;
+        }
+      }
+    });
+    
+    return srtContent || convertVttToSrt(transcript.content);
+  } catch (error) {
+    console.error("Error converting to SRT:", error);
+    return convertVttToSrt(transcript.content);
+  }
+};
+
+// Convert VTT format to SRT as fallback
+const convertVttToSrt = (vttContent: string): string => {
+  if (!vttContent) return '';
   
-In a real application, this would be generated by Azure AI Content Understanding API.
-
-The transcript would contain time-coded text of all spoken content in the video.
-
-00:00:05 - Introduction to the topic
-00:01:15 - Key points discussed by the speaker
-00:03:22 - Detailed explanation of the subject matter
-00:05:47 - Summary of main ideas
-00:07:30 - Conclusion and next steps`;
-}
+  // Remove VTT header
+  let content = vttContent.replace(/^WEBVTT\n/, '');
+  
+  // Split into cues
+  const cues = content.trim().split(/\n\n+/);
+  
+  let srtContent = '';
+  let index = 1;
+  
+  cues.forEach(cue => {
+    // Skip empty cues
+    if (!cue.trim()) return;
+    
+    const lines = cue.trim().split('\n');
+    
+    // Check if this looks like a cue with timing
+    const timingLine = lines.find(line => line.includes(' --> '));
+    if (!timingLine) return;
+    
+    // Convert timing from VTT to SRT format
+    const srtTiming = timingLine.replace(/\./g, ',');
+    
+    // Remove <v Speaker> tags but keep speaker info in brackets
+    let textContent = '';
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] === timingLine) continue;
+      
+      let line = lines[i];
+      const speakerMatch = line.match(/<v\s+([^>]+)>/);
+      
+      if (speakerMatch) {
+        // Extract speaker and add as prefix in brackets
+        const speaker = speakerMatch[1].trim();
+        line = line.replace(/<v\s+[^>]+>/, `[${speaker}] `);
+      }
+      
+      textContent += line + '\n';
+    }
+    
+    // Add to SRT content
+    srtContent += `${index}\n${srtTiming}\n${textContent.trim()}\n\n`;
+    index++;
+  });
+  
+  return srtContent;
+};
 
 // Download the transcript as a text file
-export const downloadTranscript = (videoId: string, videoName: string): void => {
+export const downloadTranscript = (videoId: string, videoName: string, format = 'txt'): void => {
   const transcript = getTranscript(videoId);
   
   if (!transcript) {
@@ -285,14 +501,24 @@ export const downloadTranscript = (videoId: string, videoName: string): void => 
     return;
   }
   
+  let content = transcript.content;
+  let extension = 'txt';
+  let mimeType = 'text/plain';
+  
+  // Convert to SRT format if requested
+  if (format === 'srt') {
+    content = convertToSrt(transcript);
+    extension = 'srt';
+  }
+  
   // Create a blob from the transcript text
-  const blob = new Blob([transcript.content], { type: 'text/plain' });
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   
   // Create a link element and trigger download
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${videoName.replace(/\.[^/.]+$/, '')}_transcript.txt`;
+  a.download = `${videoName.replace(/\.[^/.]+$/, '')}_transcript.${extension}`;
   document.body.appendChild(a);
   a.click();
   

@@ -14,6 +14,7 @@ export interface Video {
 export interface Transcript {
   videoId: string;
   content: string;
+  rawData?: string; // Raw API response data for advanced processing
   language?: string;
   createdAt: Date;
 }
