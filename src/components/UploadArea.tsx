@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { uploadVideoToAzure } from "@/lib/azure";
-import { Upload, FileVideo, AlertCircle } from "lucide-react";
+import { Upload, FileVideo, AlertCircle, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -17,6 +17,7 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -61,21 +62,34 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
     setIsUploading(true);
     setUploadProgress(0);
     setErrorMsg(null);
+    setIsOfflineMode(false);
 
     try {
-      await uploadVideoToAzure(file, (progress) => {
+      const video = await uploadVideoToAzure(file, (progress) => {
         setUploadProgress(progress);
       });
       
-      toast({
-        title: "Upload successful",
-        description: "Your video is now being processed"
-      });
+      if (video.status === 'error') {
+        setIsOfflineMode(true);
+        setErrorMsg("Could not connect to Azure services. Operating in offline mode.");
+        
+        toast({
+          title: "Upload processed locally",
+          description: "Azure services unavailable - using local processing",
+          variant: "default"
+        });
+      } else {
+        toast({
+          title: "Upload successful",
+          description: "Your video is now being processed"
+        });
+      }
       
       onVideoUploaded();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
       setErrorMsg(errorMessage);
+      setIsOfflineMode(true);
       
       toast({
         title: "Upload failed",
@@ -93,6 +107,7 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
   const resetUpload = () => {
     setErrorMsg(null);
     setUploadProgress(0);
+    setIsOfflineMode(false);
   };
 
   return (
@@ -100,15 +115,18 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
       <CardContent className="p-6">
         {errorMsg ? (
           <div className="space-y-4">
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Upload Error</AlertTitle>
+            <Alert variant={isOfflineMode ? "default" : "destructive"}>
+              {isOfflineMode ? <Info className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+              <AlertTitle>{isOfflineMode ? "Offline Mode" : "Upload Error"}</AlertTitle>
               <AlertDescription>
                 {errorMsg}
               </AlertDescription>
             </Alert>
             <p className="text-sm text-muted-foreground">
-              We've automatically fallen back to processing your video locally. You can continue using the application.
+              {isOfflineMode 
+                ? "We're currently processing your video locally. Some features may be limited."
+                : "We couldn't process your video. Please try again later."
+              }
             </p>
             <div className="flex justify-end">
               <Button variant="outline" onClick={resetUpload}>
