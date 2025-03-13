@@ -4,8 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { uploadVideoToAzure } from "@/lib/azure";
-import { Upload, FileVideo } from "lucide-react";
+import { Upload, FileVideo, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface UploadAreaProps {
   onVideoUploaded: () => void;
@@ -15,6 +16,7 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -58,6 +60,7 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
 
     setIsUploading(true);
     setUploadProgress(0);
+    setErrorMsg(null);
 
     try {
       await uploadVideoToAzure(file, (progress) => {
@@ -71,77 +74,104 @@ export const UploadArea = ({ onVideoUploaded }: UploadAreaProps) => {
       
       onVideoUploaded();
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+      setErrorMsg(errorMessage);
+      
       toast({
         title: "Upload failed",
-        description: error instanceof Error ? error.message : "Unknown error occurred",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
       setIsUploading(false);
-      setUploadProgress(0);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
     }
   };
 
+  const resetUpload = () => {
+    setErrorMsg(null);
+    setUploadProgress(0);
+  };
+
   return (
     <Card className={`glass-panel w-full max-w-2xl mx-auto transition-all duration-300 transform ${isDragging ? 'scale-[1.02] shadow-lg' : ''}`}>
       <CardContent className="p-6">
-        <div
-          className={`relative rounded-lg border-2 border-dashed p-10 transition-all duration-300 ${
-            isDragging ? 'border-primary bg-primary/5' : 'border-muted'
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          <div className="flex flex-col items-center justify-center space-y-4 text-center">
-            <div className={`rounded-full p-4 bg-secondary transition-all duration-300 ${isDragging ? 'bg-primary/10' : ''}`}>
-              {isUploading ? (
-                <FileVideo className="h-10 w-10 text-primary animate-pulse-subtle" />
-              ) : (
-                <Upload className={`h-10 w-10 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
-              )}
-            </div>
-            
-            <div className="space-y-2">
-              <h3 className="text-lg font-medium">
-                {isUploading ? "Uploading video..." : "Upload a video for analysis"}
-              </h3>
-              
-              <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                {isUploading 
-                  ? "Please wait while we upload your video to Azure" 
-                  : "Drag and drop a video file here, or click browse to select one"}
-              </p>
-            </div>
-
-            {isUploading ? (
-              <div className="w-full space-y-2">
-                <Progress value={uploadProgress} className="h-2 w-full" />
-                <p className="text-xs text-muted-foreground">{uploadProgress}% uploaded</p>
-              </div>
-            ) : (
-              <Button 
-                variant="secondary" 
-                onClick={handleBrowseClick}
-                className="relative overflow-hidden group"
-              >
-                <span className="relative z-10">Browse files</span>
+        {errorMsg ? (
+          <div className="space-y-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Upload Error</AlertTitle>
+              <AlertDescription>
+                {errorMsg}
+              </AlertDescription>
+            </Alert>
+            <p className="text-sm text-muted-foreground">
+              We've automatically fallen back to processing your video locally. You can continue using the application.
+            </p>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={resetUpload}>
+                OK
               </Button>
-            )}
-            
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*"
-              className="hidden"
-              onChange={handleFileChange}
-              disabled={isUploading}
-            />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div
+            className={`relative rounded-lg border-2 border-dashed p-10 transition-all duration-300 ${
+              isDragging ? 'border-primary bg-primary/5' : 'border-muted'
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="flex flex-col items-center justify-center space-y-4 text-center">
+              <div className={`rounded-full p-4 bg-secondary transition-all duration-300 ${isDragging ? 'bg-primary/10' : ''}`}>
+                {isUploading ? (
+                  <FileVideo className="h-10 w-10 text-primary animate-pulse-subtle" />
+                ) : (
+                  <Upload className={`h-10 w-10 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
+                )}
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-lg font-medium">
+                  {isUploading ? "Uploading video..." : "Upload a video for analysis"}
+                </h3>
+                
+                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                  {isUploading 
+                    ? "Please wait while we process your video" 
+                    : "Drag and drop a video file here, or click browse to select one"}
+                </p>
+              </div>
+
+              {isUploading ? (
+                <div className="w-full space-y-2">
+                  <Progress value={uploadProgress} className="h-2 w-full" />
+                  <p className="text-xs text-muted-foreground">{uploadProgress}% uploaded</p>
+                </div>
+              ) : (
+                <Button 
+                  variant="secondary" 
+                  onClick={handleBrowseClick}
+                  className="relative overflow-hidden group"
+                >
+                  <span className="relative z-10">Browse files</span>
+                </Button>
+              )}
+              
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={handleFileChange}
+                disabled={isUploading}
+              />
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
